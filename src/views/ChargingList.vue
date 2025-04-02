@@ -53,7 +53,6 @@
     rounded
     large
     @click="toggleRefreshLoading"
-    :loading="refreshLoading"
   >
     <v-icon left>mdi-refresh</v-icon>
     Refresh Data
