@@ -45,6 +45,20 @@
                 <v-icon left>mdi-plus</v-icon>
                 Add Station
               </v-btn>
+               <!-- New Refresh Button with Loading Animation -->
+  <v-btn
+    color="secondary"
+    class="ev-button mr-4"
+    elevation="3"
+    rounded
+    large
+    @click="toggleRefreshLoading"
+    :loading="refreshLoading"
+  >
+    <v-icon left>mdi-refresh</v-icon>
+    Refresh Data
+  </v-btn>
+              
               <v-btn
                 color="error"
                 elevation="3"
@@ -56,6 +70,7 @@
                 Logout
               </v-btn>
             </div>
+            
           </div>
         </v-row>
       </v-row>
@@ -537,7 +552,8 @@
     
     // Replace hardcoded data with empty array
     chargingStations: [],
-    
+    refreshLoading: false,
+    refreshInterval: null,
     // Add loading state
     loading: false,
     
@@ -662,6 +678,41 @@ mounted() {
     
     methods: {
          // Add this method to fetch charging stations
+
+         toggleRefreshLoading() {
+    // If already refreshing, cancel it
+    if (this.refreshInterval) {
+      clearInterval(this.refreshInterval);
+      this.refreshInterval = null;
+      this.refreshLoading = false;
+      return;
+    }
+    
+    this.refreshLoading = true;
+    
+    // First immediate refresh
+    this.fetchChargingStations();
+    
+    // Create an interval that toggles the loading state every 2 seconds
+    this.refreshInterval = setInterval(() => {
+      // Toggle loading state off briefly
+      this.refreshLoading = false;
+      
+      // Short delay to show it's off momentarily
+      setTimeout(() => {
+        // Toggle loading state back on and refresh data
+        this.refreshLoading = true;
+        this.fetchChargingStations();
+      }, 200);
+    }, 4000); // Total cycle is 4 seconds (2 seconds on, small break, then repeats)
+  },
+  
+  // Make sure to clear the interval when component is destroyed
+  beforeDestroy() {
+    if (this.refreshInterval) {
+      clearInterval(this.refreshInterval);
+    }
+  },
   async fetchChargingStations() {
     this.loading = true;
     try {
@@ -784,26 +835,50 @@ async deleteStation() {
   this.confirmDialog.show = false;
 },
       // Map related methods
-      loadLeafletScript() {
+   
+// First, we need to load the Leaflet MarkerCluster plugin
+// Add these to your loadLeafletScript method
+
+loadLeafletScript() {
   // Load Leaflet CSS
   const linkCSS = document.createElement('link');
   linkCSS.rel = 'stylesheet';
   linkCSS.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
   document.head.appendChild(linkCSS);
   
+  // Load MarkerCluster CSS
+  const clusterCSS = document.createElement('link');
+  clusterCSS.rel = 'stylesheet';
+  clusterCSS.href = 'https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css';
+  document.head.appendChild(clusterCSS);
+  
+  const clusterDefaultCSS = document.createElement('link');
+  clusterDefaultCSS.rel = 'stylesheet';
+  clusterDefaultCSS.href = 'https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css';
+  document.head.appendChild(clusterDefaultCSS);
+  
   // Load Leaflet JS
   const script = document.createElement('script');
   script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
   script.onload = () => {
     console.log('Leaflet loaded successfully');
-    if (this.viewMode === 'map') {
-      setTimeout(() => {
-        this.initLeafletMap();
-      }, 200);
-    }
+    
+    // After Leaflet loads, load the MarkerCluster plugin
+    const clusterScript = document.createElement('script');
+    clusterScript.src = 'https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js';
+    clusterScript.onload = () => {
+      console.log('MarkerCluster plugin loaded successfully');
+      if (this.viewMode === 'map') {
+        setTimeout(() => {
+          this.initLeafletMap();
+        }, 200);
+      }
+    };
+    document.head.appendChild(clusterScript);
   };
   document.head.appendChild(script);
-},
+}
+,
 
 initLeafletMap() {
   if (!window.L || !this.$refs.mapContainer) return;
@@ -838,8 +913,9 @@ initLeafletMap() {
 },
       
 // In your component methods
+
 initMap() {
-  console.log('Initializing Leaflet map');
+  console.log('Initializing Leaflet map with clustering');
   
   // If map already exists, remove it first
   if (this.map) {
@@ -875,7 +951,9 @@ initMap() {
 addMarkersToMap() {
   // Clear existing markers if any
   if (this.markers) {
-    this.markers.forEach(marker => marker.remove());
+    this.markers.forEach(marker => {
+      if (marker.remove) marker.remove();
+    });
   }
   
   this.markers = [];
@@ -883,18 +961,47 @@ addMarkersToMap() {
   // Skip if no stations
   if (this.chargingStations.length === 0) return;
   
+  // Create a marker cluster group
+  const markerCluster = L.markerClusterGroup({
+  showCoverageOnHover: false,
+  zoomToBoundsOnClick: true,
+  spiderfyOnMaxZoom: true,
+  removeOutsideVisibleBounds: true,
+  iconCreateFunction: function(cluster) {
+    const count = cluster.getChildCount();
+    const size = count < 10 ? 'small' : count < 20 ? 'medium' : 'large';
+    const color = count < 5 ? '#91CE5F' : count < 10 ? '#1E88E5' : count < 20 ? '#1E88E5' : '#FFCA28';
+    
+    // Create an SVG marker pin with the count
+    const svgPin = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
+        <g fill="none" fill-rule="evenodd">
+          <path d="M20 0c11.046 0 20 8.954 20 20s-8.954 20-20 20S0 31.046 0 20 8.954 0 20 0z" fill="${color}" opacity=".9"/>
+          <text fill="#FFF" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" x="20" y="25">
+            ${count}
+          </text>
+        </g>
+      </svg>
+    `;
+    
+    // Create a div icon with the SVG
+    return L.divIcon({
+      html: svgPin,
+      className: `marker-cluster marker-cluster-${size}`,
+      iconSize: L.point(40, 40),
+      iconAnchor: [20, 20]
+    });
+  }
+});
+  
   // Add a marker for each station
   const bounds = [];
   
   this.chargingStations.forEach(station => {
-    // Get marker color based on status
-    let markerColor = 'green';
-    if (station.status === 'inactive') markerColor = 'gray';
-    
     // Create marker
     const marker = L.marker([station.latitude, station.longitude], {
       title: station.name
-    }).addTo(this.map);
+    });
     
     // Add popup with station info
     marker.bindPopup(`
@@ -904,9 +1011,21 @@ addMarkersToMap() {
         <div style="padding: 3px 0;"><strong>Power:</strong> ${station.powerOutput} kW</div>
         <div style="padding: 3px 0;"><strong>Connector:</strong> ${this.formatConnectorType(station.connectorType)}</div>
         <div style="padding: 3px 0;"><strong>Coordinates:</strong> ${this.formatCoordinates(station.latitude, station.longitude)}</div>
-     
+        <div style="margin-top: 8px;">
+          <button onclick="window.editStation('${station.id}')" 
+                  style="background: #00796B; color: white; border: none; padding: 5px 10px; border-radius: 4px; margin-right: 5px; cursor: pointer;">
+            Edit
+          </button>
+          <button onclick="window.deleteStation('${station.id}')"
+                  style="background: #F44336; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer;">
+            Delete
+          </button>
+        </div>
       </div>
     `);
+    
+    // Add to cluster group instead of directly to map
+    markerCluster.addLayer(marker);
     
     // Store marker reference
     this.markers.push(marker);
@@ -914,6 +1033,9 @@ addMarkersToMap() {
     // Add to bounds
     bounds.push([station.latitude, station.longitude]);
   });
+  
+  // Add the cluster group to the map
+  this.map.addLayer(markerCluster);
   
   // Fit map to bounds
   if (bounds.length > 0) {
@@ -1475,4 +1597,93 @@ mounted() {
   font-size: 0.8rem;
   height: 24px;
 }
+.custom-cluster-icon {
+  background: none;
+}
+
+/* Marker Pointer Style - similar to the second image */
+.cluster-marker {
+  width: 36px;
+  height: 36px;
+  position: relative;
+}
+
+.cluster-marker:before {
+  content: "";
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 18px solid transparent;
+  border-right: 18px solid transparent;
+  border-top: 8px solid transparent;
+  border-bottom: 36px solid #1E88E5;
+  border-radius: 50% 50% 0 0;
+  z-index: -1;
+}
+
+.cluster-marker-count {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background-color: #1E88E5;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 14px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+  border: 2px solid white;
+  position: relative;
+  z-index: 1;
+}
+
+/* Hover effect for clusters */
+.leaflet-marker-icon:hover .cluster-marker {
+  transform: scale(1.1);
+  transition: transform 0.2s ease;
+}
+
+/* Animation for the refresh button */
+@keyframes pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+.v-btn.loading {
+  animation: pulse 1s infinite;
+}
+.cluster-icon {
+    position: relative;
+    background-color: red;
+    color: white;
+    font-weight: bold;
+    font-size: 14px;
+    text-align: center;
+    line-height: 24px;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);
+  }
+
+  .cluster-icon::after {
+    content: "";
+    position: absolute;
+    bottom: -10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-top: 12px solid red;
+  }
   </style>
